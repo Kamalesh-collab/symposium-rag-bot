@@ -1,52 +1,61 @@
+import os
 import streamlit as st
-import requests
+from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from groq import Groq
 
-# ==========================
-# Page Configuration
-# ==========================
+# Load environment variables
+load_dotenv()
 
-st.set_page_config(
-    page_title="RAG Symposium Bot",
-    page_icon="🤖",
-    layout="centered"
+# Streamlit UI
+st.set_page_config(page_title="Symposium RAG Bot")
+st.title("🤖 Symposium RAG Bot")
+
+# Load embeddings
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-st.title("🤖 Symposium RAG Chatbot")
-st.write("Ask questions about the Symposium PDF.")
+# Load FAISS vector store
+vector_store = FAISS.load_local(
+    "vector_store",
+    embeddings,
+    allow_dangerous_deserialization=True
+)
 
-# ==========================
-# Backend URL
-# ==========================
+# Initialize Groq client
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-BACKEND_URL = "http://127.0.0.1:8000/chat"
+# Chat input
+user_question = st.chat_input("Ask something about the symposium...")
 
-# ==========================
-# Chat Input
-# ==========================
+if user_question:
+    with st.spinner("Thinking..."):
 
-question = st.text_input("Enter your question:")
+        # Step 1: Search similar chunks
+        docs = vector_store.similarity_search(user_question, k=3)
+        context = "\n\n".join([doc.page_content for doc in docs])
 
-if st.button("Ask"):
+        # Step 2: Build prompt
+        prompt = f"""
+        Answer the question using the context below.
+        If answer not found, say you don't know.
 
-    if question.strip() == "":
-        st.warning("Please enter a question.")
-    else:
-        with st.spinner("Thinking..."):
+        Context:
+        {context}
 
-            try:
-                response = requests.post(
-                    BACKEND_URL,
-                    json={"question": question}
-                )
+        Question:
+        {user_question}
+        """
 
-                result = response.json()
+        # Step 3: Call Groq LLM
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
 
-                st.subheader("Answer:")
-                st.write(result["answer"])
+        answer = response.choices[0].message.content
 
-                st.subheader("Sources:")
-                for src in result["sources"]:
-                    st.write(f"Page {src + 1}")
-
-            except Exception as e:
-                st.error(f"Error connecting to backend: {e}")
+        st.write(answer)
